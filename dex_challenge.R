@@ -4,7 +4,7 @@ library(gridExtra); library(grid); library(cobs); library(scales)
 library(parallel); library(doParallel); library(ggplot2)
 
 ## load in data
-load("~/Dropbox/SGE_Dex_challenge_manuscript/github_code/dex_challenge.RData")
+load(url("https://github.com/nsmackler/Dex_status_2018/blob/master/dex_challenge.RData?raw=true"))
 
 ## there are 6 R Objects
 # ATAC_counts: raw ATAC-seq read counts for all 86 samples after removal of regions with a median CPM ≤ 1 in either the Dex or control conditions
