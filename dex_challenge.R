@@ -219,3 +219,53 @@ EMMA_RNA_delta=t(parApply(clus,resid_RNA_delta,1,function(y){
 }))
 EMMA_RNA_delta=as.data.frame(EMMA_RNA_delta)
 colnames(EMMA_RNA_delta)=c('beta_intercept','beta_rank','beta_TC1','beta_TC2','beta_TC3','var_beta_intercept','var_beta_rank','var_beta_TC1','var_beta_TC2','var_beta_TC3','pval_intercept','pval_rank','pval_TC1','pval_TC2','pval_TC3')
+
+#######################################################################################
+###                           GO enrichment with topGO                          #######
+#######################################################################################
+library(topGO)
+library(biomaRt)
+mmul = useMart(biomart = "ENSEMBL_MART_ENSEMBL",dataset="mmulatta_gene_ensembl")
+
+##ensembl_gene_names is a vector of ensembl gene names from your expression matrix
+mmul_GO<-getBM(attributes=c('ensembl_gene_id', 'go_id','name_1006'), filters = 'ensembl_gene_id', values = rownames(EMMA_RNA_nested), mart = mmul)
+
+geneID2GO=lapply(unique(mmul_GO$ensembl_gene_id),function(x){sort(mmul_GO[mmul_GO$ensembl_gene_id==x,"go_id"])})
+names(geneID2GO)=unique(mmul_GO$ensembl_gene_id)
+
+rm(mmul);rm(mmul_GO)
+
+## rank_tvals is a vector of standardized rank betas (beta/se(beta))
+## the names(rank_tvals) needs to be the names of the ensembl genes (in the same order as the standardized betas)
+rank_tvals=EMMA_RNA_nested$beta_rank_control/sqrt(EMMA_RNA_nested$var_beta_rank_control)
+names(rank_tvals)=rownames(EMMA_RNA_nested)
+## change the number to be whatever the standardized beta value is that corresponds to your FDR threshold:
+#FDR=20%; tval=2.26318
+
+## note that the tvals vector is multiplied by -1 here because the KS enrichment tests for the lower end of the distribution (it is assuming p-values are used)
+GOdata_highrank<-new("topGOdata",description="Simple session",ontology="BP",allGenes=(-1*rank_tvals),geneSel=function(x) x<(-2.26318),nodeSize=10,annot=annFUN.gene2GO,gene2GO = geneID2GO)
+## vector tvals not multiplied by -1 in this example (because low values == more highly expressed in low ranking animals) 
+GOdata_lowrank<-new("topGOdata",description="Simple session",ontology="BP",allGenes=rank_tvals,geneSel=function(x) x<(-2.26318),nodeSize=10,annot=annFUN.gene2GO,gene2GO = geneID2GO)
+
+#Calculate enrichment using the KS weight01 algorithm
+## GO categories enriched in genes more highly expressed in high-ranking animals
+KS_weight01<-runTest(GOdata_highrank,algorithm="weight01",statistic="ks")
+topnodes=max(KS_weight01@geneData[4])
+GOdata_highrank_results=GenTable(GOdata_highrank,KS_weight01=KS_weight01,orderBy="KS_weight01",ranksOf="KS_weight01",topNodes=topnodes,numChar=200)
+rownames(GOdata_highrank_results)=GOdata_highrank_results$GO.ID
+
+## GO categories enriched in genes more highly expressed in low-ranking animals
+KS_weight01<-runTest(GOdata_lowrank,algorithm="weight01",statistic="ks")
+topnodes=max(KS_weight01@geneData[4])
+GOdata_lowrank_results=GenTable(GOdata_lowrank,KS_weight01=KS_weight01,orderBy="KS_weight01",ranksOf="KS_weight01",topNodes=topnodes,numChar=200)
+rownames(GOdata_lowrank_results)=GOdata_lowrank_results$GO.ID
+
+## merge the outputs
+a=merge(GOdata_lowrank_results[,c(1,2,6)],GOdata_highrank_results[,c(1,6)],by=1)
+a$KS_weight01.x=as.numeric(a$KS_weight01.x)
+a$KS_weight01.y=as.numeric(a$KS_weight01.y)
+colnames(a)=c("GO.ID","Term","enrichment_lowrank","enrichment_highrank")
+a=a[order(a$enrichment_lowrank),]
+## write the file
+write.table(a,file="dex_GO_enrichment.txt",col.names = T,row.names = F,quote = F,sep="\t")
+rm(a)
