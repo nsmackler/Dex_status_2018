@@ -345,4 +345,4 @@ names(WGCNA_rank_GO)=unique(gene_modules$wgcna_input_color)
 
 ## write GO results
 WGCNA_rank_GO_table=Reduce(function(...) merge(..., by=c(1,2),all=T),lapply(WGCNA_rank_GO,function(x){x[,c(1,2,6)]}))
-colnames(WGCNA_rank_GO_table)[3:19]=names(WGCNA_rank_GO_table)
+colnames(WGCNA_rank_GO_table)[3:19]=names(WGCNA_rank_GO)
