@@ -269,3 +269,80 @@ a=a[order(a$enrichment_lowrank),]
 ## write the file
 write.table(a,file="dex_GO_enrichment.txt",col.names = T,row.names = F,quote = F,sep="\t")
 rm(a)
+                    
+#######################################################################################
+###                                WGCNA analysis                                 #######
+#######################################################################################                 
+library(WGCNA)
+### Rename rows and columns.
+rownames(ge_info)=paste0(ge_info$ID,"_",ge_info$trt)
+colnames(RNA_counts)=rownames(ge_info)
+
+### Subset Dex- samples
+ge_info=ge_info[which(ge_info$trt=="control"),]
+RNA_counts=RNA_counts[,which(colnames(RNA_counts) %in% rownames(ge_info))]
+
+## Use limma to remove technical effects associated with the group from just the Dex- samples
+voom_RNA <- voom(calcNormFactors(DGEList(counts=RNA_counts,lib.size = ge_info$mapped_reads)),plot=TRUE)
+design <- model.matrix(~ge_info$group)
+fit <-lmFit(voom_RNA,design)
+intercepts=data.frame(eBayes(fit))[,1]
+resid_RNA=apply(residuals.MArrayLM(object=fit, voom_RNA),2,function(x){x+intercepts})
+
+### Put everything into WGCNA friendly format (samples as rows and genes as columns) 
+datExpr = as.data.frame(t(resid_RNA))
+### QC routine from WGCNA, says everything's fine.
+gsg = goodSamplesGenes(datExpr, verbose = 3)
+print(paste("Are samples and genes OK?",gsg$allOK))
+
+if (!gsg$allOK)
+{
+    # Optionally, print the gene and sample names that were removed:
+    if (sum(!gsg$goodGenes)>0)
+    printFlush(paste("Removing genes:", paste(names(datExpr)[!gsg$goodGenes], collapse = ", ")))
+    if (sum(!gsg$goodSamples)>0)
+    printFlush(paste("Removing samples:", paste(rownames(datExpr)[!gsg$goodSamples], collapse = ", ")))
+    # Remove the offending genes and samples from the data:
+    datExpr = datExpr[gsg$goodSamples, gsg$goodGenes]
+}
+
+traitRows=ge_info[which(rownames(ge_info) %in% colnames(resid_RNA)),c(4,5,6,7)]
+datExpr=datExpr[order(rownames(datExpr)),]
+traitRows=traitRows[order(rownames(traitRows)),]
+
+allowWGCNAThreads()
+
+# Select power to rise the coexpression matrix to, in order to get the adjacency.
+powers = c(c(1:11), seq(from = 12, to=20, by=2))
+sft = pickSoftThreshold(datExpr, powerVector = powers, verbose = 5,blockSize=ncol(datExpr))
+pow=sft$powerEstimate
+
+#Calculate TOM and obtain modules.
+net = blockwiseModules(datExpr, blocks=rep(1,ncol(datExpr)),power = pow,TOMType = "unsigned", maxBlockSize=ncol(datExpr),minModuleSize = 30,reassignThreshold = 0, mergeCutHeight = 0.25,numericLabels = TRUE, pamRespectsDendro = FALSE,saveTOMs = TRUE,saveTOMFileBase = "CTL_TOM",verbose = 3)
+
+## convert label names to colors
+colnames(net$MEs)=labels2colors(colnames(net$MEs))
+net$named_colors=labels2colors(net$colors)
+
+## calculate association between rank and eigengene values controlling for tissue composition (TC1-3)
+apply(net$MEs,2,function(y){
+  return(summary(lm(y~scale(traitRows$elo)+traitRows$TC1+traitRows$TC2+traitRows$TC3))$coef[2,])
+  })
+ 
+## prepare "gene_modules" data frame for GO enrichment analysis
+gene_modules=data.frame(wgcna_input_color=net$named_colors,cluster=net$colors); rownames(gene_modules)=colnames(datExpr)
+
+## calculate GO enrichment using topGO
+## WGCNA GO enrichment
+WGCNA_rank_GO=lapply(unique(gene_modules$wgcna_input_color),function(color){
+module_col_vector=as.integer(gene_modules$wgcna_input_color==color)
+names(module_col_vector)=rownames(gene_modules)
+GOdata<-new("topGOdata",description="Simple session",ontology="BP",allGenes=module_col_vector,geneSel=function(x) x>0.5,nodeSize=10,annot=annFUN.gene2GO,gene2GO = geneID2GO)
+FET_weight01<-runTest(GOdata,algorithm="weight01",statistic="fisher")
+return(GenTable(GOdata,FET_weight01=FET_weight01,orderBy="FET_weight01",ranksOf="FET_weight01",topNodes=max(FET_weight01@geneData[4]),numChar=200))
+})
+names(WGCNA_rank_GO)=unique(gene_modules$wgcna_input_color)
+
+## write GO results
+WGCNA_rank_GO_table=Reduce(function(...) merge(..., by=c(1,2),all=T),lapply(WGCNA_rank_GO,function(x){x[,c(1,2,6)]}))
+colnames(WGCNA_rank_GO_table)[3:19]=names(WGCNA_rank_GO_table)
